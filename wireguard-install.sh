@@ -27,21 +27,6 @@ if [[ ! -e /dev/net/tun ]]; then
     exit
 fi
 
-
-if [ -e /etc/centos-release ]; then
-    DISTRO="CentOS"
-elif [ -e /etc/debian_version ]; then
-    DISTRO=$( lsb_release -is )
-else
-    echo "Your distribution is not supported (yet)"
-    exit
-fi
-
-if [ "$( systemd-detect-virt )" == "openvz" ]; then
-    echo "OpenVZ virtualization is not supported"
-    exit
-fi
-
 if [ ! -f "$WG_CONFIG" ]; then
     ### Install server and add default client
     INTERACTIVE=${INTERACTIVE:-yes}
@@ -88,22 +73,10 @@ if [ ! -f "$WG_CONFIG" ]; then
         read -p "Tell me a name for the client config file. Use one word only, no special characters: " -e -i "client" CLIENT_NAME
     fi
 
-    if [ "$DISTRO" == "Ubuntu" ]; then
 	apt-get install software-properties-common -y
 	add-apt-repository ppa:wireguard/wireguard -y
 	apt update
 	apt install linux-headers-$(uname -r) wireguard qrencode iptables-persistent -y
-    elif [ "$DISTRO" == "Debian" ]; then
-        echo "deb http://deb.debian.org/debian/ unstable main" > /etc/apt/sources.list.d/unstable.list
-        printf 'Package: *\nPin: release a=unstable\nPin-Priority: 90\n' > /etc/apt/preferences.d/limit-unstable
-		apt-get install software-properties-common -y
-		apt update
-		apt install linux-headers-$(uname -r) wireguard qrencode iptables-persistent -y
-    elif [ "$DISTRO" == "CentOS" ]; then
-        curl -Lo /etc/yum.repos.d/wireguard.repo https://copr.fedorainfracloud.org/coprs/jdoss/wireguard/repo/epel-7/jdoss-wireguard-epel-7.repo
-        yum install epel-release -y
-        yum install wireguard-dkms qrencode wireguard-tools firewalld -y
-    fi
 
     SERVER_PRIVKEY=$( wg genkey )
     SERVER_PUBKEY=$( echo $SERVER_PRIVKEY | wg pubkey )
@@ -142,22 +115,11 @@ qrencode -t ansiutf8 -l L < $HOME/$CLIENT_NAME-wg0.conf
     echo "net.ipv6.conf.all.forwarding=1" >> /etc/sysctl.conf
     sysctl -p
 
-    if [ "$DISTRO" == "CentOS" ]; then
-        systemctl start firewalld
-        systemctl enable firewalld
-        firewall-cmd --zone=public --add-port=$SERVER_PORT/udp
-        firewall-cmd --zone=trusted --add-source=$PRIVATE_SUBNET
-        firewall-cmd --permanent --zone=public --add-port=$SERVER_PORT/udp
-        firewall-cmd --permanent --zone=trusted --add-source=$PRIVATE_SUBNET
-        firewall-cmd --direct --add-rule ipv4 nat POSTROUTING 0 -s $PRIVATE_SUBNET ! -d $PRIVATE_SUBNET -j SNAT --to $SERVER_HOST
-        firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s $PRIVATE_SUBNET ! -d $PRIVATE_SUBNET -j SNAT --to $SERVER_HOST
-    else
-        iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-        iptables -A FORWARD -m conntrack --ctstate NEW -s $PRIVATE_SUBNET -m policy --pol none --dir in -j ACCEPT
-        iptables -t nat -A POSTROUTING -s $PRIVATE_SUBNET -m policy --pol none --dir out -j MASQUERADE
-        iptables -A INPUT -p udp --dport $SERVER_PORT -j ACCEPT
-        iptables-save > /etc/iptables/rules.v4
-    fi
+    iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    iptables -A FORWARD -m conntrack --ctstate NEW -s $PRIVATE_SUBNET -m policy --pol none --dir in -j ACCEPT
+    iptables -t nat -A POSTROUTING -s $PRIVATE_SUBNET -m policy --pol none --dir out -j MASQUERADE
+    iptables -A INPUT -p udp --dport $SERVER_PORT -j ACCEPT
+    iptables-save > /etc/iptables/rules.v4
 
     systemctl enable wg-quick@wg0.service
     systemctl start wg-quick@wg0.service
